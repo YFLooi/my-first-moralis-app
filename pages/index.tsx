@@ -1,9 +1,115 @@
-import type { NextPage } from 'next'
-import Head from 'next/head'
-import Image from 'next/image'
-import styles from '../styles/Home.module.css'
+import type { NextPage } from "next";
+import Head from "next/head";
+import Image from "next/image";
+import styles from "../styles/Home.module.css";
+import {
+  useMoralis,
+  useMoralisQuery,
+  useMoralisSubscription,
+  useMoralisCloudFunction,
+} from "react-moralis";
+import { useState } from "react";
 
 const Home: NextPage = () => {
+  const [avgGasPrices, setAvgGasPrices] = useState([]);
+
+  // Moralis.start({ serverUrl, appId });
+  const { user, logout, authenticate, isAuthenticated } = useMoralis();
+
+  // Equivalent to Moralis.query()
+  // runs on componentDidMount. Why not on call?
+  // If I wanna query something else, I need to skip the use of obj destructuring
+  // or use state to set the query params?
+  // or break each into its own component?
+  const EthTransactions = useMoralisQuery(
+    "EthTransactions",
+    (query) => {
+      // Equivalent to this in non-react moralis:
+      // const query = new Moralis.Query("EthTransactions");
+      // query.equalTo("from_address", user.get("ethAddress"));
+      // const results = await query.find();
+
+      return query.equalTo("from_address", user?.get("ethAddress"));
+    },
+    [],
+
+    {
+      autoFetch: true, // Limit to fetching on demand if set to false
+      live: true, // Allows subscribing to changes
+    }
+  );
+
+  // Hook. Equivalent to Moralis.cloud()
+  // Resulting obj has: { fetch data, error, isLoading }
+  const getAvgGas = useMoralisCloudFunction("getAvgGas");
+
+  // Subscribe to EthTransactions
+  useMoralisSubscription("EthTransactions", (query) => query, [], {
+    onCreate: (data) => {
+      alert(
+        `EthTransactions was just created for ${user?.get(
+          "username"
+        )}. Data: ${JSON.stringify(data, null, 2)}`
+      );
+    },
+    onUpdate: (data) => {
+      alert(
+        `EthTransactions updated for ${user?.get(
+          "username"
+        )}. Data: ${JSON.stringify(data, null, 2)}`
+      );
+    },
+  });
+
+  async function moralisLogin() {
+    if (!isAuthenticated) {
+      await authenticate();
+    } else {
+      // Use optional chaining to prevent type error due to user possibly being null
+      console.log(
+        `logged in user: ${user?.get("username")}. Getting EthTransactions`
+      );
+      await getCurrentEthTransactionHistory();
+    }
+  }
+  async function moralisLogout() {
+    await logout();
+    console.log("logged out user:", user?.get("username"));
+  }
+  function logCurrentUser() {
+    console.log("logged in user:", user?.get("username"));
+  }
+  async function getCurrentEthTransactionHistory() {
+    console.log(`Getting current ETH transaction history`);
+    await EthTransactions.fetch();
+    await getAverageGasPrices();
+
+    if (EthTransactions.isLoading) {
+      return `Still fetching`;
+    } else {
+      if (EthTransactions.error) {
+        throw new Error(`Unable to fetch current ETH transaction history`);
+      } else {
+        console.log(`Transactions found: ${EthTransactions.data?.length}`);
+        console.log(
+          `Sample transaction: ${JSON.stringify(
+            EthTransactions.data[0],
+            null,
+            2
+          )}`
+        );
+        return EthTransactions.data;
+      }
+    }
+  }
+  async function getAverageGasPrices() {
+    await getAvgGas.fetch();
+
+    const results = getAvgGas.data as never[];
+    console.log("average user gas prices:", getAvgGas.data);
+    setAvgGasPrices((prevState) => [...results]);
+  }
+
   return (
     <div className={styles.container}>
       <Head>
@@ -13,43 +119,71 @@ const Home: NextPage = () => {
       </Head>
 
       <main className={styles.main}>
-        <h1 className={styles.title}>
-          Welcome to <a href="https://nextjs.org">Next.js!</a>
-        </h1>
-
-        <p className={styles.description}>
-          Get started by editing{' '}
-          <code className={styles.code}>pages/index.tsx</code>
-        </p>
-
-        <div className={styles.grid}>
-          <a href="https://nextjs.org/docs" className={styles.card}>
-            <h2>Documentation &rarr;</h2>
-            <p>Find in-depth information about Next.js features and API.</p>
-          </a>
-
-          <a href="https://nextjs.org/learn" className={styles.card}>
-            <h2>Learn &rarr;</h2>
-            <p>Learn about Next.js in an interactive course with quizzes!</p>
-          </a>
-
-          <a
-            href="https://github.com/vercel/next.js/tree/master/examples"
-            className={styles.card}
+        <div>
+          <h1>Gas stats with Moralis</h1>
+          <button
+            id="btn-login"
+            className="btn btn-primary"
+            onClick={() => {
+              moralisLogin();
+            }}
           >
-            <h2>Examples &rarr;</h2>
-            <p>Discover and deploy boilerplate example Next.js projects.</p>
-          </a>
-
-          <a
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template&utm_campaign=create-next-app"
-            className={styles.card}
+            Moralis Login
+          </button>
+          <button
+            id="btn-logout"
+            className="btn btn-primary"
+            onClick={() => {
+              moralisLogout();
+            }}
           >
-            <h2>Deploy &rarr;</h2>
-            <p>
-              Instantly deploy your Next.js site to a public URL with Vercel.
-            </p>
-          </a>
+            Moralis logout
+          </button>
+          <button
+            onClick={() => {
+              logCurrentUser();
+            }}
+          >
+            Moralis user chk
+          </button>
+        </div>
+        <div>
+          <button
+            className="btn btn-success"
+            onClick={() => {
+              getCurrentEthTransactionHistory();
+            }}
+          >
+            Log transaction history
+          </button>
+        </div>
+        <div>
+          <h4>Average user gas prices</h4>
+          <div>
+            {avgGasPrices?.length == 0 ? (
+              <div>No average gas prices obtained</div>
+            ) : (
+              <ul>
+                {avgGasPrices.map(
+                  (price: { avgGas: number; objectId: string }, index) => {
+                    if (price.avgGas >= 0) {
+                      return (
+                        <li>
+                          #{index + 1} {Math.round(price.avgGas)} gwei
+                        </li>
+                      );
+                    } else {
+                      return (
+                        <li>
+                          No avgGas for entry of objectId {price.objectId}
+                        </li>
+                      );
+                    }
+                  }
+                )}
+              </ul>
+            )}
+          </div>
         </div>
       </main>
 
@@ -59,14 +193,14 @@ const Home: NextPage = () => {
           target="_blank"
           rel="noopener noreferrer"
         >
-          Powered by{' '}
+          Powered by{" "}
           <span className={styles.logo}>
             <Image src="/vercel.svg" alt="Vercel Logo" width={72} height={16} />
           </span>
         </a>
       </footer>
     </div>
-  )
-}
+  );
+};
 
-export default Home
+export default Home;
